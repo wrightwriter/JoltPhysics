@@ -8,6 +8,7 @@
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/PhysicsScene.h>
@@ -28,8 +29,12 @@ const char *VehicleTest::sScenes[] =
 	"Flat With Slope",
 	"Steep Slope",
 	"Step",
+	"Dynamic Step",
 	"Playground",
+	"Loop",
+#ifdef JPH_OBJECT_STREAM
 	"Terrain1",
+#endif // JPH_OBJECT_STREAM
 };
 
 const char *VehicleTest::sSceneName = "Playground";
@@ -85,6 +90,19 @@ void VehicleTest::Initialize()
 		step.SetFriction(1.0f);
 		mBodyInterface->AddBody(step.GetID(), EActivation::DontActivate);
 	}
+	else if (strcmp(sSceneName, "Dynamic Step") == 0)
+	{
+		// Flat test floor
+		Body &floor = *mBodyInterface->CreateBody(BodyCreationSettings(new BoxShape(Vec3(1000.0f, 1.0f, 1000.0f), 0.0f), RVec3(0.0f, -1.0f, 0.0f), Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING));
+		floor.SetFriction(1.0f);
+		mBodyInterface->AddBody(floor.GetID(), EActivation::DontActivate);
+
+		// A dynamic body that acts as a step to test sleeping behavior
+		constexpr float cStepHeight = 0.05f;
+		Body &step = *mBodyInterface->CreateBody(BodyCreationSettings(new BoxShape(Vec3(15.0f, 0.5f * cStepHeight, 15.0f), 0.0f), RVec3(-2.0f, 0.5f * cStepHeight, 30.0f), Quat::sIdentity(), EMotionType::Dynamic, Layers::MOVING));
+		step.SetFriction(1.0f);
+		mBodyInterface->AddBody(step.GetID(), EActivation::Activate);
+	}
 	else if (strcmp(sSceneName, "Playground") == 0)
 	{
 		// Scene with hilly terrain and some objects to drive into
@@ -97,6 +115,51 @@ void VehicleTest::Initialize()
 
 		CreateRubble();
 	}
+	else if (strcmp(sSceneName, "Loop") == 0)
+	{
+		CreateFloor();
+
+		TriangleList triangles;
+		const int cNumSegments = 100;
+		const float cLoopWidth = 20.0f;
+		const float cLoopRadius = 20.0f;
+		const float cLoopThickness = 0.5f;
+		Vec3 prev_center = Vec3::sZero();
+		Vec3 prev_center_bottom = Vec3::sZero();
+		for (int i = 0; i < cNumSegments; ++i)
+		{
+			float angle = i * 2.0f * JPH_PI / (cNumSegments - 1);
+			Vec3 radial(0, -Cos(angle), Sin(angle));
+			Vec3 center = Vec3(-i * cLoopWidth / (cNumSegments - 1), cLoopRadius, cLoopRadius) + cLoopRadius * radial;
+			Vec3 half_width(0.5f * cLoopWidth, 0, 0);
+			Vec3 center_bottom = center + cLoopThickness * radial;
+			if (i > 0)
+			{
+				// Top surface
+				triangles.push_back(Triangle(prev_center + half_width, prev_center - half_width, center - half_width));
+				triangles.push_back(Triangle(prev_center + half_width, center - half_width, center + half_width));
+
+				// Bottom surface
+				triangles.push_back(Triangle(prev_center_bottom + half_width, center_bottom - half_width, prev_center_bottom - half_width));
+				triangles.push_back(Triangle(prev_center_bottom + half_width, center_bottom + half_width, center_bottom - half_width));
+
+				// Sides
+				triangles.push_back(Triangle(prev_center + half_width, center + half_width, prev_center_bottom + half_width));
+				triangles.push_back(Triangle(prev_center_bottom + half_width, center + half_width, center_bottom + half_width));
+				triangles.push_back(Triangle(prev_center - half_width, prev_center_bottom - half_width, center - half_width));
+				triangles.push_back(Triangle(prev_center_bottom - half_width, center_bottom - half_width, center - half_width));
+			}
+			prev_center = center;
+			prev_center_bottom = center_bottom;
+		}
+		MeshShapeSettings mesh(triangles);
+		mesh.SetEmbedded();
+
+		Body &loop = *mBodyInterface->CreateBody(BodyCreationSettings(&mesh, RVec3::sZero(), Quat::sIdentity(), EMotionType::Static, Layers::NON_MOVING));
+		loop.SetFriction(1.0f);
+		mBodyInterface->AddBody(loop.GetID(), EActivation::Activate);
+	}
+#ifdef JPH_OBJECT_STREAM
 	else
 	{
 		// Load scene
@@ -108,6 +171,7 @@ void VehicleTest::Initialize()
 		scene->FixInvalidScales();
 		scene->CreateBodies(mPhysicsSystem);
 	}
+#endif // JPH_OBJECT_STREAM
 }
 
 void VehicleTest::CreateBridge()

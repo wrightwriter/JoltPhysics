@@ -12,7 +12,6 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollidePointResult.h>
-#include <Jolt/Physics/SoftBody/SoftBodyVertex.h>
 #include <Jolt/Core/StreamIn.h>
 #include <Jolt/Core/StreamOut.h>
 #include <Jolt/Core/Factory.h>
@@ -32,6 +31,12 @@ bool Shape::sDrawSubmergedVolumes = false;
 #endif // JPH_DEBUG_RENDERER
 
 ShapeFunctions ShapeFunctions::sRegistry[NumSubShapeTypes];
+
+const Shape *Shape::GetLeafShape([[maybe_unused]] const SubShapeID &inSubShapeID, SubShapeID &outRemainder) const
+{
+	outRemainder = inSubShapeID;
+	return this;
+}
 
 TransformedShape Shape::GetSubShapeTransformedShape(const SubShapeID &inSubShapeID, Vec3Arg inPositionCOM, QuatArg inRotation, Vec3Arg inScale, SubShapeID &outRemainder) const
 {
@@ -59,8 +64,8 @@ void Shape::TransformShape(Mat44Arg inCenterOfMassTransform, TransformedShapeCol
 {
 	Vec3 scale;
 	Mat44 transform = inCenterOfMassTransform.Decompose(scale);
-	TransformedShape ts(RVec3(transform.GetTranslation()), transform.GetRotation().GetQuaternion(), this, BodyID(), SubShapeIDCreator());
-	ts.SetShapeScale(scale);
+	TransformedShape ts(RVec3(transform.GetTranslation()), transform.GetQuaternion(), this, BodyID(), SubShapeIDCreator());
+	ts.SetShapeScale(MakeScaleValid(scale));
 	ioCollector.AddHit(ts);
 }
 
@@ -118,7 +123,7 @@ void Shape::SaveWithChildren(StreamOut &inStream, ShapeToIDMap &ioShapeMap, Mate
 		// Write the ID's of all sub shapes
 		ShapeList sub_shapes;
 		SaveSubShapeState(sub_shapes);
-		inStream.Write(sub_shapes.size());
+		inStream.Write(uint32(sub_shapes.size()));
 		for (const Shape *shape : sub_shapes)
 		{
 			if (shape == nullptr)
@@ -174,7 +179,7 @@ Shape::ShapeResult Shape::sRestoreWithChildren(StreamIn &inStream, IDToShapeMap 
 	ioShapeMap.push_back(result.Get());
 
 	// Read the sub shapes
-	size_t len;
+	uint32 len;
 	inStream.Read(len);
 	if (inStream.IsEOF() || inStream.IsFailed())
 	{
@@ -214,6 +219,16 @@ Shape::Stats Shape::GetStatsRecursive(VisitedShapes &ioVisitedShapes) const
 		stats.mSizeBytes = 0;
 
 	return stats;
+}
+
+bool Shape::IsValidScale(Vec3Arg inScale) const
+{
+	return !ScaleHelpers::IsZeroScale(inScale);
+}
+
+Vec3 Shape::MakeScaleValid(Vec3Arg inScale) const
+{
+	return ScaleHelpers::MakeNonZeroScale(inScale);
 }
 
 Shape::ShapeResult Shape::ScaleShape(Vec3Arg inScale) const
@@ -271,42 +286,6 @@ Shape::ShapeResult Shape::ScaleShape(Vec3Arg inScale) const
 	return compound.Create();
 }
 
-void Shape::sCollideSoftBodyVerticesUsingRayCast(const Shape &inShape, Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, SoftBodyVertex *ioVertices, uint inNumVertices, float inDeltaTime, Vec3Arg inDisplacementDueToGravity, int inCollidingShapeIndex)
-{
-	Mat44 inverse_transform = Mat44::sScale(inScale.Reciprocal()) * inCenterOfMassTransform.InversedRotationTranslation();
-	Mat44 direction_preserving_transform = inverse_transform.Transposed3x3(); // To transform normals: transpose of the inverse
-
-	for (SoftBodyVertex *v = ioVertices, *sbv_end = ioVertices + inNumVertices; v < sbv_end; ++v)
-		if (v->mInvMass > 0.0f)
-		{
-			// Calculate the distance we will move this frame
-			Vec3 movement = v->mVelocity * inDeltaTime + inDisplacementDueToGravity;
-
-			RayCastResult hit;
-			hit.mFraction = 2.0f; // Add a little extra distance in case the particle speeds up
-
-			RayCast ray(v->mPosition - 0.5f * movement, movement); // Start a little early in case we penetrated before
-
-			if (inShape.CastRay(ray.Transformed(inverse_transform), SubShapeIDCreator(), hit))
-			{
-				// Calculate penetration
-				float penetration = (0.5f - hit.mFraction) * movement.Length();
-				if (penetration > v->mLargestPenetration)
-				{
-					v->mLargestPenetration = penetration;
-
-					// Calculate contact point and normal
-					Vec3 point = ray.GetPointOnRay(hit.mFraction);
-					Vec3 normal = direction_preserving_transform.Multiply3x3(inShape.GetSurfaceNormal(hit.mSubShapeID2, inverse_transform * point)).Normalized();
-
-					// Store collision
-					v->mCollisionPlane = Plane::sFromPointAndNormal(point, normal);
-					v->mCollidingShapeIndex = inCollidingShapeIndex;
-				}
-			}
-		}
-}
-
 void Shape::sCollidePointUsingRayCast(const Shape &inShape, Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter)
 {
 	// First test if we're inside our bounding box
@@ -332,9 +311,9 @@ void Shape::sCollidePointUsingRayCast(const Shape &inShape, Vec3Arg inPoint, con
 
 		// Configure the raycast
 		RayCastSettings settings;
-		settings.mBackFaceMode = EBackFaceMode::CollideWithBackFaces;
+		settings.SetBackFaceMode(EBackFaceMode::CollideWithBackFaces);
 
-		// Cast a ray that's 10% longer than the heigth of our bounding box
+		// Cast a ray that's 10% longer than the height of our bounding box
 		inShape.CastRay(RayCast { inPoint, 1.1f * bounds.GetSize().GetY() * Vec3::sAxisY() }, settings, inSubShapeIDCreator, collector, inShapeFilter);
 
 		// Odd amount of hits means inside

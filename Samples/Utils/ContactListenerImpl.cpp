@@ -12,8 +12,10 @@
 
 ValidateResult ContactListenerImpl::OnContactValidate(const Body &inBody1, const Body &inBody2, RVec3Arg inBaseOffset, const CollideShapeResult &inCollisionResult)
 {
-	// Expect body 1 to be dynamic (or one of the bodies must be a sensor)
-	if (!inBody1.IsDynamic() && !inBody1.IsSensor() && !inBody2.IsSensor())
+	// Check ordering contract between body 1 and body 2
+	bool contract = inBody1.GetMotionType() >= inBody2.GetMotionType()
+		|| (inBody1.GetMotionType() == inBody2.GetMotionType() && inBody1.GetID() < inBody2.GetID());
+	if (!contract)
 		JPH_BREAKPOINT;
 
 	ValidateResult result;
@@ -107,7 +109,8 @@ void ContactListenerImpl::OnContactRemoved(const SubShapeIDPair &inSubShapePair)
 void ContactListenerImpl::SaveState(StateRecorder &inStream) const
 {
 	// Write length
-	inStream.Write(mState.size());
+	uint32 length = uint32(mState.size());
+	inStream.Write(length);
 
 	// Get and sort keys
 	Array<SubShapeIDPair> keys;
@@ -124,7 +127,7 @@ void ContactListenerImpl::SaveState(StateRecorder &inStream) const
 		// Write value
 		const StatePair &sp = mState.find(k)->second;
 		inStream.Write(sp.first);
-		inStream.Write(sp.second.size());
+		inStream.Write(uint32(sp.second.size()));
 		inStream.WriteBytes(sp.second.data(), sp.second.size() * sizeof(Vec3));
 	}
 }
@@ -134,9 +137,9 @@ void ContactListenerImpl::RestoreState(StateRecorder &inStream)
 	Trace("Restore Contact State");
 
 	// Read length
-	StateMap::size_type length;
+	uint32 length;
 	if (inStream.IsValidating())
-		length = mState.size();
+		length = uint32(mState.size());
 	inStream.Read(length);
 
 	Array<SubShapeIDPair> keys;
@@ -154,7 +157,7 @@ void ContactListenerImpl::RestoreState(StateRecorder &inStream)
 		QuickSort(keys.begin(), keys.end());
 	}
 
-	// Ensure we have the corect size
+	// Ensure we have the correct size
 	keys.resize(length);
 
 	for (size_t i = 0; i < length; ++i)
@@ -173,9 +176,9 @@ void ContactListenerImpl::RestoreState(StateRecorder &inStream)
 		inStream.Read(sp.first);
 
 		// Read num contact points
-		ContactPoints::size_type num_contacts;
+		uint32 num_contacts;
 		if (inStream.IsValidating())
-			num_contacts = old_state[key].second.size();
+			num_contacts = uint32(old_state[key].second.size());
 		inStream.Read(num_contacts);
 
 		// Read contact points

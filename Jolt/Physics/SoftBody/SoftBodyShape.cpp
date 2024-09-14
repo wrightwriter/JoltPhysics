@@ -29,6 +29,14 @@ uint SoftBodyShape::GetSubShapeIDBits() const
 	return 32 - CountLeadingZeros(n);
 }
 
+uint32 SoftBodyShape::GetFaceIndex(const SubShapeID &inSubShapeID) const
+{
+	SubShapeID remainder;
+	uint32 face_index = inSubShapeID.PopID(GetSubShapeIDBits(), remainder);
+	JPH_ASSERT(remainder.IsEmpty());
+	return face_index;
+}
+
 AABox SoftBodyShape::GetLocalBounds() const
 {
 	return mSoftBodyMotionProperties->GetLocalBounds();
@@ -84,8 +92,8 @@ void SoftBodyShape::CastRay(const RayCast &inRay, const RayCastSettings &inRayCa
 		Vec3 x3 = vertices[f.mVertex[2]].mPosition;
 
 		// Back facing check
-		if (inRayCastSettings.mBackFaceMode == EBackFaceMode::IgnoreBackFaces && (x2 - x1).Cross(x3 - x1).Dot(inRay.mDirection) > 0.0f)
-			return;
+		if (inRayCastSettings.mBackFaceModeTriangles == EBackFaceMode::IgnoreBackFaces && (x2 - x1).Cross(x3 - x1).Dot(inRay.mDirection) > 0.0f)
+			continue;
 
 		// Test ray against triangle
 		float fraction = RayTriangle(inRay.mOrigin, inRay.mDirection, x1, x2, x3);
